@@ -1,0 +1,195 @@
+---
+title: "清华夏令营"
+author: "马宇恒"
+date: "6/17/2020"
+output: html_document
+---
+
+```{r}
+library(VIM)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(lars)
+```
+
+
+
+
+```{r}
+auto<-read.csv("imports-85data.csv")
+colnames(auto)<-c("symboling","normalized-losses","make","fuel-type","aspiration", "num-of-doors","body-style",
+         "drive-wheels","engine-location","wheel-base", "length","width","height","curb-weight","engine-type",
+         "num-of-cylinders", "engine-size","fuel-system","bore","stroke","compression-ratio","horsepower",
+         "peak-rpm","city-mpg","highway-mpg","price")
+```
+
+
+
+
+
+
+
+```{r}
+## data cleaning
+auto$price<-as.numeric(auto$price)
+auto$'normalized-losses'<-as.numeric(auto$'normalized-losses')
+auto$bore<-as.numeric(auto$bore)
+auto$stroke<-as.numeric(auto$stroke)
+auto$horsepower<-as.numeric(auto$horsepower)
+auto$`peak-rpm`<-as.numeric(auto$`peak-rpm`)
+auto<-auto[auto$`num-of-doors`!="?",]
+
+## missing value filling by cor with symboling
+str(auto)
+meanloss<-NULL
+for (i in -2:3){
+  temp<-mean(na.omit(auto$`normalized-losses`[auto$symboling==i]))
+  meanloss<-c(meanloss,temp)
+}
+for(i in 1:length(auto$`normalized-losses`)){
+  if(is.na(auto$`normalized-losses`[i])== 1){
+    
+  auto$`normalized-losses`[i]<-meanloss[auto$symboling[i]+3]
+  print(auto$symboling[i]+3)
+  }
+}
+auto<-na.omit(auto)
+aggr(auto,prop=TRUE)
+```
+
+
+```{r}
+## into numerical and dummy variable
+autonumericed<-auto[c(1,2,10:14,17,19:26)]
+dummymake <- model.matrix(~make+`fuel-type`+`aspiration`+`num-of-doors`+`body-style`+`engine-location`+`engine-type`+`drive-wheels`+`num-of-cylinders`+`fuel-system`, auto)
+autonumericed<-cbind(autonumericed,as.data.frame(dummymake)[-1])
+autonumericed<-sapply(autonumericed, as.numeric)
+```
+
+```{r}
+autonumericed
+lar<-lars(x=autonumericed[,c(-1,-2,-16)],y=autonumericed[,16],type = "lar")
+summary(lar)
+plot(lar)
+```
+
+```{r}
+coef<-coef.lars(lar,mode="step",s=7)
+coef[coef!=0]
+```
+
+
+
+
+
+
+
+
+
+```{r}
+## check sum of squares
+wss <- numeric(15) 
+for (k in 1:15) {wss[k] <- sum(kmeans(autonumericed, centers=k, nstart=25)$withinss)}
+plot(1:15, wss, type="b", xlab="Number of Clusters", ylab="Within Sum of Squares") 
+```
+
+```{r}
+## kmeans and visualization
+km<-kmeans(autonumericed, centers=3, nstart=25)
+clustering<-cbind(autonumericed,km$cluster)
+clustering<-cbind(clustering,auto$make)
+colnames(clustering)[63]<-"make"
+ggplot(clustering,aes(x=make,y=price,group=as.factor(cluster),colour=as.factor(cluster)))+geom_point()+theme(
+    axis.text.x=element_text(angle=90, size=8))
+```
+
+
+
+```{r}
+cor(auto$symboling,auto$price)
+cor(auto$symboling,auto$`normalized-losses`)
+plot(auto$symboling,auto$price)
+```
+
+
+
+
+```{r}
+scaleplot<-function(data,name,iflog=0){
+  data<-data[c(1,which(colnames(data)==name))]
+  indexx=NULL
+  indexy=NULL
+  indextype=NULL
+  for (i in 1:length(name)){
+    indexx=c(indexx,1:nrow(data))
+    indexy=c(indexy,data[[name[i]]])
+    indextype=c(indextype,rep(name[i],nrow(data)))
+  }
+  if(iflog==1){
+    indexy=log(indexy)
+  }
+  plotdata<-data.frame(indexx,indexy,indextype)
+  p<-ggplot(plotdata,aes(x=indexx,y=indexy,group=indextype,colour=indextype))+geom_line()
+  p
+}
+```
+
+```{r}
+scaleplot(autonumericed,colnames(autonumericed),iflog=1)
+```
+
+
+
+```{r}
+## separate training set and test set
+set.seed(233)
+autonumericed<-as.data.frame(autonumericed)
+index<-sample(1:nrow(autonumericed),round(nrow(autonumericed)*2/10))
+autonumericedtest<-autonumericed[index,]
+autonumericedtraining<-autonumericed[-index,]
+```
+
+```{r}
+## decision tree
+tree<-rpart(symboling~wheel.base+height+engine.size
+                   +horsepower+price+aspirationturbo+X.num.of.doors.two
+                   +X.drive.wheels.fwd+X.drive.wheels.rwd+
+                     X.engine.type.l+X.engine.type.ohc+
+                     X.engine.type.ohcf+X.engine.type.ohcv+
+                     X.num.of.cylinders.five+X.num.of.cylinders.four+
+                     X.num.of.cylinders.six+X.num.of.cylinders.three+
+                     X.num.of.cylinders.twelve , data=autonumericed,method = "class")
+```
+
+
+```{r}
+prp(tree,type=4,extra=2,digits=3)#此处type参数为0~5
+plot(tree,margin=0.2)
+```
+
+
+
+```{r}
+linear<-lm(`normalized-losses`~.,data=auto)
+summary(linear)
+linear<-step(linear)
+predict(linear,auto)
+par(mfrow=c(2,2))
+plot(linear)
+summary(linear)
+
+```
+
+```{r}
+linear<-lm(log(price)~.,data=auto[,c(-1,-2)])
+summary(linear)
+linear<-step(linear)
+predict(linear,auto)
+par(mfrow=c(2,2))
+plot(linear)
+summary(linear)
+
+```
+
+
